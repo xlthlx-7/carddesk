@@ -62,3 +62,10 @@ dialog::backdrop{background:#172c4688}
 .markdown table{display:block;overflow:auto;border-collapse:collapse}
 .markdown th,.markdown td{border:1px solid var(--line);padding:.3rem .65rem}
 .diagram{width:100%;height:19rem;border:1px solid var(--line);background:white;border-radius:.38rem}
+
+.card-reference{display:inline;color:#24577b;background:#eaf4fb;border:0;border-radius:.2rem;padding:0 .22em;text-decoration:underline;text-underline-offset:.17em;font:inherit}
+.reading-card:focus{outline:2px solid #8bcbb9;outline-offset:.35rem}
+.reading-children{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,15rem),1fr));gap:1rem}
+.reading-children:empty{display:none}
+.reading-children>.reading-branch{min-width:0;padding:.9rem;border:1px solid var(--line);background:white;border-radius:.55rem}
+.reading-branch>h2{margin:0 0 .45rem}

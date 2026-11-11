@@ -1,3 +1,4 @@
+import {attachReferencePicker, createReadingPath} from "./reading-path.js";
 import {previewMarkdown} from "./preview.js";
 const find = (selector) => document.querySelector(selector);
 const main = find("#main");
@@ -137,6 +138,8 @@ function editor(item, parent) {
   const kind = select(parent, "类型", [["观点","观点"],["问题","问题"]], item.kind);
   const body = field(parent, "正文（Markdown）", {value:item.body || "", rows:9}, "textarea");
   body.maxLength = 50000;
+  const choices = element("div", null, parent, {className:"actions"});
+  attachReferencePicker(body, choices, () => data.cards);
   const preview = element("section", null, parent, {className:"markdown", hidden:true});
   button(parent, "预览正文", async () => {
     preview.hidden = false;
@@ -165,11 +168,10 @@ function showOrigin(item, parent) {
 
 function renderCard(card) {
   element("h1", card.title || "新建卡片", main);
-  const reading = element("article", null, main, {className:"markdown",hidden:!card.id});
-  if (card.id) void previewMarkdown(reading, card.body, json).catch(error => {
-    reading.textContent = card.body;
-    notify(error.message);
-  });
+  const reading = element("div", null, main, {hidden:!card.id});
+  const article = element("article", null, reading);
+  const path = createReadingPath(reading, json, () => data.cards, notify, id => open("cards", id));
+  if (card.id) void path.append(card, null, article);
   const actions = element("div", null, main, {className:"actions"});
   const editing = element("section", null, main, {hidden:!!card.id});
   const values = editor(card, editing);
@@ -188,6 +190,16 @@ function renderCard(card) {
     notify("卡片已保存");
   }, true);
   if (!card.id) return;
+  button(actions, "保存阅读路径为主题", async () => {
+    const entries = path.entries();
+    if (entries.length < 2) { notify("请先点开正文中的卡片引用"); return; }
+    const saved = await json("topics", {
+      title:card.title, card_ids:[...new Set(entries.map(entry => entry.card_id))], reading_path:entries
+    });
+    await refresh();
+    await open("topics", saved.id);
+    notify("阅读路径已保存");
+  });
   if (card.ai_allowed && !card.archived) button(actions, "围绕这张卡提问", () => open("chats", null, card.id));
   if (card.tags.length) element("p", card.tags.map(tag => "#" + tag).join("  "), main, {className:"muted"});
   if (card.merged_into) button(main, "查看合并后的卡片", () => open("cards", card.merged_into));
@@ -579,6 +591,20 @@ function renderTopic(topic) {
   element("h1", topic.title || "新建主题", main);
   const title = field(main, "主题名称", {value:topic.title || "",maxLength:200});
   const question = field(main, "要回答的问题", {value:topic.question || "",maxLength:8000});
+  if (topic.reading_path?.length) {
+    const panel = element("details", null, main);
+    element("summary", "按保存的层级阅读", panel);
+    const content = element("div", null, panel);
+    panel.ontoggle = async () => {
+      if (!panel.open || content.childNodes.length) return;
+      const path = createReadingPath(content, json, () => data.cards, notify, id => open("cards", id));
+      const nodes = [];
+      for (const entry of topic.reading_path) {
+        const card = data.cards.find(item => item.id === entry.card_id);
+        nodes.push(card ? await path.append(card, nodes[entry.parent]) : null);
+      }
+    };
+  }
   const pathway = element("ol", null, main);
   const ids = [...(topic.card_ids || [])];
   const text = field(main, "主题笔记或写作提纲", {value:topic.body || "",rows:10,maxLength:50000}, "textarea");
@@ -665,7 +691,7 @@ async function globalGraph() {
   if (busy) return;
   extraView("全局图谱");
   const tag = select(main, "标签", [["","全部标签"], ...choiceList(availableTags())]);
-  const kind = select(main, "关系类型", [["","全部关系"], ...choiceList(relationTypes)]);
+  const kind = select(main, "关系类型", [["","全部关系"], ...choiceList([...relationTypes, "正文引用"])]);
   const display = element("div", null, main);
   async function update() {
     const graph = await json("graph?" + new URLSearchParams({tag:tag.value,kind:kind.value}));

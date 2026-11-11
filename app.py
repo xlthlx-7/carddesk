@@ -7,7 +7,7 @@ from urllib.parse import urlsplit
 from typing import Literal
 
 import httpx
-from markdown_it import MarkdownIt
+from card_refs import markdown, reference_edges
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -110,9 +110,6 @@ class MarkdownPreview(BaseModel):
     body: str = Field(max_length=50000)
 
 
-markdown = MarkdownIt("commonmark", {"html": False}).enable(["table", "strikethrough"])
-
-
 @app.post("/api/markdown")
 def preview_markdown(payload: MarkdownPreview):
     return {"html": markdown.render(payload.body)}
@@ -190,6 +187,16 @@ def detail(card_id: int):
                FROM links l JOIN cards c ON c.id=CASE WHEN l.origin=? THEN l.target ELSE l.origin END
                WHERE l.origin=? OR l.target=? ORDER BY l.id""", (card_id, card_id, card_id)
         )]
+        cards = all_cards(db)
+        by_id = {item["id"]: item for item in cards}
+        seen = set()
+        for edge in reference_edges(cards):
+            pair = edge["origin"], edge["target"]
+            if card_id not in pair or pair in seen or by_id[edge["origin"]]["archived"]:
+                continue
+            seen.add(pair)
+            neighbor = edge["target"] if edge["origin"] == card_id else edge["origin"]
+            edges.append({**edge, "neighbor": neighbor, "title": by_id[neighbor]["title"]})
         suggestion = db.execute("SELECT * FROM drafts WHERE card_id=? AND target IS NOT NULL", (card_id,)).fetchone()
         source = get(db, "sources", card["source_id"]) if card["source_id"] else None
         merged = db.execute("""WITH RECURSIVE previous(id) AS (

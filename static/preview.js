@@ -30,7 +30,7 @@ function showDiagram(code) {
   details.append(summary, source);
 }
 
-export async function previewMarkdown(container, body, request) {
+export async function previewMarkdown(container, body, request, openReference) {
   const {html} = await request("markdown", {body});
   // The server escapes raw HTML and rejects unsafe URL schemes.
   const template = document.createElement("template");
@@ -38,6 +38,16 @@ export async function previewMarkdown(container, body, request) {
   template.content.querySelectorAll("a").forEach(link => {
     link.target = "_blank";
     link.rel = "noopener noreferrer";
+  });
+  template.content.querySelectorAll(".card-reference").forEach(button => {
+    if (!openReference) {
+      const label = document.createElement("span");
+      label.className = button.className;
+      label.append(...button.childNodes);
+      button.replaceWith(label);
+      return;
+    }
+    button.onclick = () => openReference(button.dataset.reference, button);
   });
   template.content.querySelectorAll("img").forEach(image => {
     image.loading = "lazy";

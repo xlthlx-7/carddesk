@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from card_refs import reference_edges
 from discovery import clusters, rank, semantic
 from web_import import extract_page
 
@@ -34,6 +35,8 @@ def migrate(db):
     for name, definition in COLUMNS.items():
         if name not in existing:
             db.execute(f"ALTER TABLE cards ADD COLUMN {name} {definition}")
+    if "reading_path" not in {row["name"] for row in db.execute("PRAGMA table_info(topics)")}:
+        db.execute("ALTER TABLE topics ADD COLUMN reading_path TEXT NOT NULL DEFAULT '[]'")
 
 
 def card_view(row):
@@ -77,8 +80,24 @@ class Topic(BaseModel):
     card_ids: list[int] = Field(default_factory=list, max_length=100)
 
 
+class PathEntry(BaseModel):
+    card_id: int
+    parent: int | None = None
+
+
+class ReadingTopic(Topic):
+    reading_path: list[PathEntry] | None = Field(default=None, max_length=100)
+
+
+def checked_path(entries, card_ids):
+    for index, entry in enumerate(entries):
+        if entry.card_id not in card_ids or (entry.parent is not None and not 0 <= entry.parent < index):
+            raise ValueError("无效的阅读路径")
+    return entries
+
+
 def topic_view(row):
-    return {**row, "card_ids": json.loads(row["card_ids"])}
+    return {**row, "card_ids": json.loads(row["card_ids"]), "reading_path": json.loads(row["reading_path"])}
 
 
 def backup_response(db):
@@ -105,6 +124,8 @@ def restore(db, payload):
         if not isinstance(rows, list):
             raise ValueError()
         for row in rows:
+            if table == "topics" and isinstance(row, dict) and "reading_path" not in row:
+                row = {**row, "reading_path": "[]"}
             if not isinstance(row, dict) or set(row) != set(names):
                 raise ValueError()
             for col in columns:
@@ -118,6 +139,11 @@ def restore(db, payload):
                 expected = str if key == "tags" else int
                 if not isinstance(items, list) or any(type(item) is not expected for item in items):
                     raise ValueError()
+            if table == "topics":
+                path = json.loads(row["reading_path"])
+                if not isinstance(path, list) or len(path) > 100:
+                    raise ValueError()
+                checked_path([PathEntry.model_validate(entry) for entry in path], set(json.loads(row["card_ids"])))
             db.execute(f"INSERT INTO {table} ({','.join(names)}) VALUES ({','.join('?' for _ in names)})",
                        [row[name] for name in names])
     if db.execute("PRAGMA foreign_key_check").fetchone():
@@ -236,26 +262,39 @@ def routes(database, get):
 
     @router.post("/topics")
     @router.put("/topics/{topic_id}")
-    def save_topic(payload: Topic, topic_id: int | None = None):
+    def save_topic(payload: ReadingTopic, topic_id: int | None = None):
         with database() as db:
             for card_id in payload.card_ids:
                 get(db, "cards", card_id)
-            values = (payload.title.strip(), payload.question.strip(), payload.body, json.dumps(
-                list(dict.fromkeys(payload.card_ids))))
+            previous = topic_view(get(db, "topics", topic_id)) if topic_id is not None else {}
+            path = payload.reading_path
+            if path is None:
+                path = [PathEntry.model_validate(entry) for entry in previous.get("reading_path", [])]
+                if any(entry.card_id not in payload.card_ids for entry in path):
+                    path = []
+            try:
+                checked_path(path, set(payload.card_ids))
+            except ValueError:
+                raise HTTPException(422, "无效的阅读路径")
+            values = (payload.title.strip(), payload.question.strip(), payload.body,
+                      json.dumps(list(dict.fromkeys(payload.card_ids))),
+                      json.dumps([entry.model_dump() for entry in path]))
             if topic_id is None:
-                topic_id = db.execute("INSERT INTO topics(title,question,body,card_ids) VALUES (?,?,?,?)", values).lastrowid
+                topic_id = db.execute("INSERT INTO topics(title,question,body,card_ids,reading_path) VALUES (?,?,?,?,?)", values).lastrowid
             else:
-                get(db, "topics", topic_id)
-                db.execute("UPDATE topics SET title=?,question=?,body=?,card_ids=? WHERE id=?", (*values, topic_id))
+                db.execute("UPDATE topics SET title=?,question=?,body=?,card_ids=?,reading_path=? WHERE id=?", (*values, topic_id))
         return {"id": topic_id}
 
     @router.get("/graph")
     def graph(tag: str = "", kind: str = ""):
         with database() as db:
+            library = all_cards(db)
             cards = [{"id": card["id"], "title": card["title"], "tags": card["tags"]}
-                     for card in all_cards(db) if not card["archived"] and (not tag or tag in card["tags"])]
+                     for card in library if not card["archived"] and (not tag or tag in card["tags"])]
             ids = {card["id"] for card in cards}
-            edges = [dict(row) for row in db.execute("SELECT * FROM links ORDER BY id")
+            links = [dict(row) for row in db.execute("SELECT * FROM links ORDER BY id")]
+            references = {(edge["origin"], edge["target"]): edge for edge in reference_edges(library)}
+            edges = [row for row in [*links, *references.values()]
                      if row["origin"] in ids and row["target"] in ids and (not kind or row["kind"] == kind)]
         return {"cards": cards, "edges": edges, "groups": clusters(cards, edges)}
 
