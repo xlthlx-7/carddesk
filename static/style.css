@@ -1,0 +1,64 @@
+:root{color-scheme:light;--ink:#172c46;--muted:#506178;--line:#cbd8e2;--paper:#f9fcfe;--blue:#213e69;--mint:#d7f4ea;--white:#fff;font:15px/1.6 system-ui,"PingFang SC",sans-serif}
+*{box-sizing:border-box}
+body{margin:0;color:var(--ink);background:var(--paper)}
+header{padding:.9rem clamp(1rem,4vw,3rem);background:var(--ink);color:var(--white);display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap}
+header a{color:inherit}
+.brand{font-size:1.5rem;font-weight:750;letter-spacing:.09em}
+.brand small{font-size:.8rem;font-weight:500;letter-spacing:0;margin-left:.5rem;color:#c4d4e5}
+#mode{font-size:.8rem;color:#bef3e0;margin-right:.8rem}
+.desk{display:grid;grid-template-columns:minmax(210px, .8fr) minmax(0,2fr) minmax(265px,1fr);min-height:calc(100vh - 66px);max-width:1660px;margin:auto}
+.catalog,.map{padding:1.2rem;background:#edf4f8}
+.catalog{border-right:1px solid var(--line)}
+.map{border-left:1px solid var(--line)}
+main{padding:clamp(1.2rem,4vw,3.5rem);min-width:0}
+h1,h2,p{margin:0 0 1rem;overflow-wrap:anywhere}
+h1{font-size:clamp(1.65rem,3vw,2.5rem);line-height:1.25;letter-spacing:-.035em}
+h2{font-size:1.12rem}
+p{max-width:65ch}
+button,input,textarea,select{font:inherit;color:inherit}
+button,input,textarea,select{border:1px solid var(--line);border-radius:.38rem;background:var(--white);padding:.45rem .65rem}
+button{cursor:pointer}
+button:hover{border-color:var(--blue)}
+button:disabled{opacity:.58;cursor:wait}
+:focus-visible{outline:3px solid #2b78ab;outline-offset:2px}
+.primary{background:var(--blue);border-color:var(--blue);color:white}
+nav,.actions{display:flex;flex-wrap:wrap;gap:.5rem;margin-bottom:1rem}
+nav button[aria-pressed=true],.selected{background:var(--mint);border-color:#77a997}
+label{display:block;margin:.65rem 0;font-weight:600}
+label>input,label>textarea,label>select{display:block;width:100%;margin-top:.25rem;font-weight:400}
+textarea{resize:vertical;min-height:6rem}
+#new{margin:.35rem 0 .8rem;width:100%}
+#list{display:grid;gap:.35rem}
+#list button{text-align:left;overflow-wrap:anywhere}
+.muted{color:var(--muted);font-size:.9rem}
+.quote,.message{white-space:pre-wrap;overflow-wrap:anywhere;padding:1rem;background:white;border-left:3px solid #8dabc3;margin:0 0 1rem}
+.message.user{background:var(--mint);border-color:#559984}
+.references{display:flex;flex-wrap:wrap;gap:.3rem .9rem;margin-bottom:1rem;max-height:10rem;overflow:auto}
+.references label{font-weight:400;margin:0}
+.references input{margin-right:.4rem}
+details{margin:1rem 0}
+summary{cursor:pointer;font-weight:650}
+svg{width:100%;display:block;background:#f9fcfe;border:1px solid var(--line);border-radius:1rem}
+svg text{font-size:11px;fill:var(--ink);pointer-events:none}
+svg g[role=button]{cursor:pointer}
+.edge-list{display:grid;gap:.4rem;margin-top:.75rem}
+.edge-list button{text-align:left}
+#status{position:fixed;right:1rem;bottom:1rem;background:var(--ink);color:white;padding:.55rem .9rem;border-radius:.4rem;max-width:90vw}
+#status:empty{display:none}
+@media(max-width:1050px){.desk{grid-template-columns:210px minmax(0,1fr)}.map{grid-column:2;border-top:1px solid var(--line);border-left:0}.catalog{grid-row:span 2}}
+@media(max-width:650px){.desk{display:block}.catalog{border-right:0;border-bottom:1px solid var(--line)}#list{max-height:9rem;overflow:auto}}
+
+[hidden]{display:none!important}
+#model-settings{margin-right:.65rem;color:var(--ink)}
+dialog{width:min(34rem,calc(100% - 2rem));padding:1.5rem;border:1px solid var(--line);border-radius:.8rem;color:var(--ink);background:var(--paper)}
+dialog::backdrop{background:#172c4688}
+.check input{display:inline;width:auto;margin:0 .25rem 0 0}
+#model-result:empty{display:none}
+
+.markdown{margin:1rem 0;overflow-wrap:anywhere}
+.markdown img{display:block;max-width:100%;height:auto}
+.markdown pre{overflow:auto;padding:.75rem;background:#edf4f8;border-radius:.38rem}
+.markdown blockquote{margin:1rem 0;padding-left:.9rem;border-left:3px solid #8dabc3}
+.markdown table{display:block;overflow:auto;border-collapse:collapse}
+.markdown th,.markdown td{border:1px solid var(--line);padding:.3rem .65rem}
+.diagram{width:100%;height:19rem;border:1px solid var(--line);background:white;border-radius:.38rem}
