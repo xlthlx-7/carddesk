@@ -4,30 +4,42 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>接页 · 知识卡片工作台</title>
-<link rel="stylesheet" href="/static/style.css">
-<script type="module" src="/static/app.js"></script>
+<link rel="stylesheet" href="/static/style.css?v=graph-force-1">
+<script type="module" src="/static/app.js?v=graph-force-1"></script>
 </head>
 <body>
-<header><div class="brand">接页 <small>知识卡片工作台</small></div><div><span id="mode"></span> <button id="model-settings" type="button">模型设置</button> <a href="/api/export">导出 Markdown</a></div></header>
-<div class="desk">
-<aside class="catalog">
+<header>
+<div class="brand">接页 <small>知识卡片工作台</small></div>
 <nav aria-label="工作区">
-<button data-tab="cards">卡库</button><button data-tab="sources">素材</button>
-<button data-tab="chats">对话</button><button data-tab="drafts">待审核</button>
-<button data-tab="topics">主题</button><button id="global-graph">全局图谱</button>
-<button id="data-tools">备份恢复</button>
+<button data-tab="home">首页</button>
+<button data-tab="cards">卡库</button>
+<button data-tab="sources" id="inbox-tab">收件箱</button>
+<button data-tab="topics">主题</button>
+<details class="top-menu"><summary>设置与数据</summary><div class="card-menu-actions">
+<button id="model-settings" type="button">模型设置</button><button id="data-tools">备份恢复</button><button id="trash">回收站</button>
+<a href="/api/export">导出 Markdown</a>
+</div></details>
 </nav>
+<button id="chat-toggle" type="button" aria-controls="chat-panel" aria-expanded="false">AI 对话</button>
+</header>
+<div class="desk">
+<aside class="catalog" hidden>
+<div class="actions" id="inbox-views" hidden aria-label="收件箱视图">
+<button id="inbox-sources">素材</button><button id="inbox-drafts">待审核</button>
+</div>
 <label id="searchbox">搜索卡片<input id="search" type="search" placeholder="标题或正文关键词"></label>
 <div id="card-filters"></div>
 <button id="new" class="primary"></button>
 <div id="list"></div>
 </aside>
 <main id="main"></main>
-<aside class="map" id="map"></aside>
+<aside class="chat-panel" id="chat-panel" aria-label="AI 对话" hidden></aside>
+<aside class="map" id="map" hidden></aside>
 </div>
 <dialog id="model-dialog" aria-labelledby="model-heading">
 <form id="model-form">
 <h2 id="model-heading">模型设置</h2>
+<p id="mode" class="muted"></p>
 <p class="muted">接入支持 Chat Completions 流式响应的服务。保存后，所选参考卡和对话内容会发送到此接口。</p>
 <label class="check"><input name="enabled" type="checkbox"> 启用模型</label>
 <label>接口根地址<input name="base_url" type="url" placeholder="https://api.openai.com/v1" required></label>

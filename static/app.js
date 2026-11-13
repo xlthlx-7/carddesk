@@ -1,10 +1,24 @@
+import {drawConstellation} from "./constellation.js";
 import {attachReferencePicker, createReadingPath} from "./reading-path.js";
 import {previewMarkdown} from "./preview.js";
+import {demoRequest} from "./demo.js";
 const find = (selector) => document.querySelector(selector);
+const staticDemo = document.documentElement.dataset.staticDemo === "true";
+if (staticDemo) {
+  for (const selector of ["#inbox-tab", "#model-settings", "#data-tools", "#trash", "#chat-toggle"]) {
+    find(selector).hidden = true;
+  }
+}
 const main = find("#main");
 const map = find("#map");
+const chatPanel = find("#chat-panel");
+const chatToggle = find("#chat-toggle");
+let chatRevision = 0;
+let chatPending = false;
+let chatInitialized = false;
 const search = find("#search");
-let data, tab = "cards", active = null, refs = new Set(), busy = false, timer;
+const searchBox = search.closest("label");
+let data, tab = "home", active = null, timer;
 let revision = 0;
 let includeArchived = false;
 let selectedTag = "";
@@ -39,6 +53,7 @@ async function api(path, body, method = "POST") {
 }
 
 async function json(...args) {
+  if (staticDemo) return demoRequest(...args);
   return (await api(...args)).json();
 }
 
@@ -46,7 +61,6 @@ function button(parent, label, action, primary = false) {
   return element("button", label, parent, {
     type: "button", className: primary ? "primary" : "",
     onclick: async (event) => {
-      if (busy) return;
       const node = event.currentTarget;
       node.disabled = true;
       try { await action(); } catch (error) { notify(error.message); }
@@ -71,50 +85,216 @@ async function refresh() {
   find("#mode").textContent = data.demo ? "演示模式 · 未连接模型" : "模型已配置";
 }
 
+const readingKey = "carddesk.last-reading";
+
+function lastReading() {
+  try { return JSON.parse(localStorage.getItem(readingKey)) || null; }
+  catch { return null; }
+}
+
+function rememberReading(id, entries) {
+  try { localStorage.setItem(readingKey, JSON.stringify({id, entries})); }
+  catch { /* Reading still works without browser storage. */ }
+}
+
+function renderHome() {
+  const layout = element("div", null, main, {className:"graph-home"});
+  const graph = element("section", null, layout);
+
+  const home = element("aside", null, layout, {className:"home-tools"});
+  const preview = element("section", null, home, {className:"home-section",hidden:true});
+  void renderGlobalGraph(graph, preview);
+  const form = element("form", null, home, {className:"home-search"});
+  const input = field(form, "搜索卡片", {type:"search", placeholder:"标题、正文或标签"});
+  element("button", "搜索", form, {type:"submit", className:"primary"});
+  form.onsubmit = event => {
+    event.preventDefault();
+    search.value = input.value;
+    selectedTag = "";
+    cardScope = "all";
+    cardLimit = 40;
+    browseScroll = 0;
+    browseFocus = null;
+    open("cards", null, {browse:true, focusSearch:true}).catch(error => notify(error.message));
+  };
+
+  const previous = lastReading();
+  const card = data.cards.find(item => item.id === previous?.id);
+  if (card) {
+    const section = element("section", null, home, {className:"home-section"});
+    element("h2", "继续阅读", section);
+    button(section, card.title, () => open("cards", card.id));
+  }
+  const processed = new Set([...data.cards, ...data.drafts].map(item => item.source_id));
+  const pending = data.sources.filter(item => !processed.has(item.id));
+  if (pending.length || data.drafts.length) {
+    const section = element("section", null, home, {className:"home-section"});
+    element("h2", "待整理", section);
+    if (pending.length) button(section, `素材 · ${pending.length}`, () => open("sources", pending[0].id));
+    if (data.drafts.length) button(section, `待审核 · ${data.drafts.length}`, () => open("drafts", data.drafts[0].id));
+  }
+  if (staticDemo) {
+    element("p", "公开演示 · 只读快照", home, {className:"muted"});
+    const index = data.cards.find(item => item.tags.includes("索引"));
+    if (index) button(home, "打开学习索引", () => open("cards", index.id), true);
+    return;
+  }
+  const actions = element("div", null, home, {className:"actions"});
+  button(actions, "新建卡片", () => open("cards"), true);
+  button(actions, "收集素材", () => open("sources"));
+}
+
+let cardScope = "all";
+let cardLimit = 40;
+let browseScroll = 0;
+let browseFocus = null;
+let browsingCards = false;
+let recentCards = [];
+try {
+  const saved = JSON.parse(localStorage.getItem("carddesk.recent-cards"));
+  if (Array.isArray(saved)) recentCards = saved.filter(Number.isInteger).slice(0, 40);
+} catch { /* Browser storage is optional. */ }
+
+function recordCardRead(id) {
+  recentCards = [id, ...recentCards.filter(item => item !== id)].slice(0, 40);
+  try { localStorage.setItem("carddesk.recent-cards", JSON.stringify(recentCards)); }
+  catch { /* Browser storage is optional. */ }
+}
+
+function cardSnippet(body, query) {
+  const plain = body
+    .replace(/\[\[(?:#[0-9]+\|)?([^\]]+)\]\]/g, "$1")
+    .replace(/!?\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/[#*`]/g, "").replace(/\s+/g, " ").trim();
+  const match = query ? plain.toLocaleLowerCase().indexOf(query) : -1;
+  const start = match < 0 ? 0 : Math.max(0, match - 38);
+  const end = start + Math.max(150, query.length + 60);
+  return (start ? "…" : "") + plain.slice(start, end) + (plain.length > end ? "…" : "");
+}
+
+function updateCardFilter() {
+  cardLimit = 40;
+  browseScroll = 0;
+  browseFocus = null;
+  if (tab === "cards" && !browsingCards) {
+    void open("cards", null, {browse:true}).catch(error => notify(error.message));
+  } else renderList();
+}
+
 function renderList() {
-  const list = find("#list");
+  const sidebarList = find("#list");
+  sidebarList.hidden = tab === "cards";
+  sidebarList.replaceChildren();
+  const list = browsingCards ? find("#card-results") : sidebarList;
   list.replaceChildren();
-  find("#searchbox").hidden = tab !== "cards";
+  const catalog = find(".catalog");
+  catalog.hidden = tab === "home";
+  find("#inbox-views").hidden = !["sources", "drafts"].includes(tab);
+  find("#inbox-sources").setAttribute("aria-pressed", String(tab === "sources"));
+  find("#inbox-drafts").setAttribute("aria-pressed", String(tab === "drafts"));
+  searchBox.hidden = !browsingCards;
   document.querySelectorAll("[data-tab]").forEach(node => {
-    node.setAttribute("aria-pressed", String(node.dataset.tab === tab));
+    node.setAttribute("aria-pressed", String(node.dataset.tab === tab || (node.id === "inbox-tab" && tab === "drafts")));
   });
+  if (tab === "home") return;
   const add = find("#new");
-  add.hidden = tab === "drafts";
+  add.hidden = staticDemo || tab === "drafts" || tab === "cards";
   add.textContent = {cards:"新建卡片", sources:"粘贴素材", chats:"新对话",topics:"新建主题"}[tab] || "";
   const query = search.value.trim().toLocaleLowerCase();
   const filters = find("#card-filters");
   filters.replaceChildren();
   if (tab === "cards") {
     const tag = select(filters, "标签", [["", "全部标签"], ...choiceList(availableTags())], selectedTag);
-    tag.onchange = () => { selectedTag = tag.value; renderList(); };
+    const scopes = element("div", null, filters, {className:"actions", role:"group"});
+    scopes.setAttribute("aria-label", "卡片范围");
+    for (const [key, label] of [["all","全部"],["index","索引与总结"],["recent","最近阅读"]]) {
+      const control = element("button", label, scopes, {type:"button"});
+      control.setAttribute("aria-pressed", String(cardScope === key));
+      control.onclick = () => {
+        cardScope = key;
+        updateCardFilter();
+        filters.querySelector(`[data-scope="${key}"]`)?.focus();
+      };
+      control.dataset.scope = key;
+    }
+    tag.onchange = () => { selectedTag = tag.value; updateCardFilter(); filters.querySelector("select").focus(); };
     const archived = checkbox(filters, "显示已归档卡片", includeArchived);
-    archived.onchange = () => { includeArchived = archived.checked; renderList(); };
+    archived.onchange = () => { includeArchived = archived.checked; updateCardFilter(); filters.querySelector("input").focus(); };
   }
-  const items = data[tab].filter(item => tab !== "cards" || (
-    (includeArchived || !item.archived) && (!selectedTag || item.tags.includes(selectedTag)) &&
+  if (tab === "cards" && !browsingCards) return;
+  let items = data[tab].filter(item => tab !== "cards" || (
+    (includeArchived || !item.archived) &&
+    (cardScope !== "index" || item.tags.some(tag => ["索引", "总结"].includes(tag))) &&
+    (cardScope !== "recent" || recentCards.includes(item.id)) &&
+    (!selectedTag || item.tags.includes(selectedTag)) &&
     (item.title + "\n" + item.body + "\n" + item.tags.join(" ")).toLocaleLowerCase().includes(query)
   ));
+  if (tab === "cards" && cardScope === "recent") {
+    items.sort((a, b) => recentCards.indexOf(a.id) - recentCards.indexOf(b.id));
+  }
+  if (browsingCards) element("p", `${items.length} 张卡片`, list, {className:"muted"});
   if (!items.length) element("p", query && tab === "cards" ? "没有匹配卡片" : "这里还没有内容", list, {className:"muted"});
-  items.forEach(item => {
+  (tab === "cards" ? items.slice(0, cardLimit) : items).forEach(item => {
     const node = button(list, item.title + (item.archived ? "（已归档）" : ""), () => open(tab, item.id));
+    if (tab === "cards") node.dataset.cardId = item.id;
+    if (browsingCards) {
+      const title = node.textContent;
+      node.textContent = "";
+      node.classList.add("browse-result");
+      element("strong", title, node);
+      element("span", cardSnippet(item.body, query), node, {className:"browse-snippet"});
+      if (item.tags.length) element("small", item.tags.map(tag => "#" + tag).join("  "), node);
+    }
     if (item.id === active) node.classList.add("selected");
+  });
+  if (tab === "cards" && items.length > cardLimit) button(list, "显示更多", () => {
+    const next = items[cardLimit].id;
+    cardLimit += 40;
+    renderList();
+    list.querySelector(`[data-card-id="${next}"]`)?.focus();
   });
 }
 
-async function open(next, id = null, reference = null, messageId = null) {
-  if (busy) return;
+async function open(next, id = null, {browse = false, focusSearch = false} = {}) {
+  if (browsingCards && !browse) {
+    browseScroll = window.scrollY;
+    browseFocus = id;
+  }
+  browsingCards = next === "cards" && browse;
+  main.hidden = false;
   const token = ++revision;
+  if (next !== "cards") setChatVisible(false);
   tab = next;
   active = id;
-  renderList();
   main.replaceChildren();
+  if (browsingCards) {
+    const heading = element("div", null, main, {className:"card-heading"});
+    element("h1", "卡库", heading, {id:"browse-heading",tabIndex:-1});
+    if (!staticDemo) button(heading, "新建卡片", () => open("cards"), true);
+    main.append(searchBox);
+    element("div", null, main, {id:"card-results"});
+  } else {
+    find(".catalog").append(searchBox);
+  }
+  renderList();
+  map.hidden = true;
   map.replaceChildren();
-  element("h2", "卡片关系", map);
-  if (next !== "cards" || !id) element("p", "打开一张已保存的卡片，查看它的直接关联。", map, {className:"muted"});
-  if (next === "cards") {
+  if (next === "home") {
+    renderHome();
+  } else if (browsingCards) {
+    const previous = find("#card-results").querySelector(`[data-card-id="${browseFocus}"]`);
+    (focusSearch ? search : previous || find("#browse-heading")).focus({preventScroll:true});
+    window.scrollTo(0, browseScroll);
+  } else if (next === "cards") {
     const card = id ? await json("cards/" + id) : {};
     if (token !== revision) return;
-    renderCard(card);
+    if (id && !card.deleted) {
+      recordCardRead(id);
+      renderList();
+    }
+    button(main, "返回卡片列表", () => open("cards", null, {browse:true}));
+    renderCard(card, lastReading());
+    window.scrollTo(0, 0);
   } else if (next === "sources") {
     renderSource(data.sources.find(item => item.id === id));
   } else if (next === "topics") {
@@ -124,12 +304,6 @@ async function open(next, id = null, reference = null, messageId = null) {
     const draft = data.drafts.find(item => item.id === id);
     if (draft) renderDraft(draft);
     else element("h1", "待审核的卡片", main);
-  } else {
-    const chat = id ? await json("chats/" + id) : {messages:[]};
-    if (token !== revision) return;
-    const allowed = new Set(aiCards().map(card => card.id));
-    refs = new Set((reference != null ? [reference] : chat.messages.at(-1)?.refs || []).filter(id => allowed.has(id)));
-    renderChat(chat, messageId);
   }
 }
 
@@ -158,31 +332,33 @@ function showOrigin(item, parent) {
     if (/^https?:\/\//i.test(source.url)) {
       element("a", source.title, details, {href:source.url,target:"_blank",rel:"noopener noreferrer"});
     }
-    button(details, "查看素材原文", () => open("sources", item.source_id));
+    if (!source.deleted) button(details, "查看素材原文", () => open("sources", item.source_id));
   }
   if (item.message_id) button(details, "回到对话消息", async () => {
     const message = await json("messages/" + item.message_id);
-    await open("chats", message.chat_id, null, message.id);
+    await showChat(message.chat_id, null, message.id);
   });
 }
 
-function renderCard(card) {
-  element("h1", card.title || "新建卡片", main);
-  const reading = element("div", null, main, {hidden:!card.id});
+function renderCard(card, previous) {
+  const heading = element("div", null, main, {className:"card-heading"});
+  element("h1", card.title || "新建卡片", heading);
+  const reading = element("div", null, main, {className:"card-reading",hidden:!card.id});
   const article = element("article", null, reading);
-  const path = createReadingPath(reading, json, () => data.cards, notify, id => open("cards", id));
-  if (card.id) void path.append(card, null, article);
-  const actions = element("div", null, main, {className:"actions"});
+  if (staticDemo) {
+    renderDemoCardMenu(card, heading);
+    const path = createReadingPath(reading, json, () => data.cards, notify, id => open("cards", id), () => {
+      if (reading.isConnected) rememberReading(card.id, path.entries());
+    }, renderDemoCardMenu);
+    const entries = previous?.id === card.id && Array.isArray(previous.entries) ? previous.entries : [];
+    void path.restore(card, article, entries).then(() => {
+      if (reading.isConnected) rememberReading(card.id, path.entries());
+    }).catch(error => notify(error.message));
+    return;
+  }
   const editing = element("section", null, main, {hidden:!!card.id});
   const values = editor(card, editing);
-  if (card.id) {
-    const edit = button(actions, "编辑卡片", () => {
-      editing.hidden = !editing.hidden;
-      reading.hidden = !editing.hidden;
-      edit.textContent = editing.hidden ? "编辑卡片" : "返回阅读";
-      if (!editing.hidden) editing.querySelector("input").focus();
-    });
-  }
+
   button(editing, "保存卡片", async () => {
     const result = await json(card.id ? "cards/" + card.id : "cards", values(), card.id ? "PUT" : "POST");
     await refresh();
@@ -190,9 +366,26 @@ function renderCard(card) {
     notify("卡片已保存");
   }, true);
   if (!card.id) return;
-  button(actions, "保存阅读路径为主题", async () => {
+  if (card.deleted) {
+    main.replaceChildren();
+    element("h1", card.title, main);
+    button(main, "从回收站恢复", () => changeTrash("cards", card.id, false));
+    return;
+  }
+
+  const {action, trigger} = cardMenu(heading);
+  action("编辑卡片", () => {
+    editing.hidden = false;
+    reading.hidden = true;
+    editing.querySelector("input").focus();
+  });
+  button(editing, "返回阅读", () => {
+    editing.hidden = true;
+    reading.hidden = false;
+    trigger.focus();
+  });
+  const save = action("保存为主题", async () => {
     const entries = path.entries();
-    if (entries.length < 2) { notify("请先点开正文中的卡片引用"); return; }
     const saved = await json("topics", {
       title:card.title, card_ids:[...new Set(entries.map(entry => entry.card_id))], reading_path:entries
     });
@@ -200,19 +393,127 @@ function renderCard(card) {
     await open("topics", saved.id);
     notify("阅读路径已保存");
   });
-  if (card.ai_allowed && !card.archived) button(actions, "围绕这张卡提问", () => open("chats", null, card.id));
-  if (card.tags.length) element("p", card.tags.map(tag => "#" + tag).join("  "), main, {className:"muted"});
-  if (card.merged_into) button(main, "查看合并后的卡片", () => open("cards", card.merged_into));
-  else renderCardSettings(card);
-  if (card.merged_sources.length) {
-    const history = element("details", null, main);
-    element("summary", "合并记录与原始来源", history);
-    for (const old of card.merged_sources) {
-      button(history, old.title, () => open("cards", old.id));
-      showOrigin(old, history);
-    }
+  save.hidden = true;
+  const path = createReadingPath(reading, json, () => data.cards, notify, id => open("cards", id), () => {
+    const entries = path.entries();
+    save.hidden = entries.length < 2;
+    if (reading.isConnected) rememberReading(card.id, entries);
+  }, (child, heading, update) => renderChildMenu(child, heading, update));
+  const entries = previous?.id === card.id && Array.isArray(previous.entries) ? previous.entries : [];
+  void path.restore(card, article, entries).then(() => {
+    if (!reading.isConnected) return;
+    const current = path.entries();
+    save.hidden = current.length < 2;
+    rememberReading(card.id, current);
+  });
+  if (card.ai_allowed && !card.archived) action("围绕这张卡提问", () => showChat(null, card.id));
+  if (card.excerpt || card.merged_sources.length) {
+    action("查看来源", () => {
+      showCardPanel("卡片来源", trigger);
+      showOrigin(card, map);
+      for (const old of card.merged_sources) {
+        button(map, old.title, () => open("cards", old.id));
+        showOrigin(old, map);
+      }
+    });
   }
-  showOrigin(card, main);
+  action("查看关系图谱", () => {
+    showCardPanel("卡片关系", trigger);
+    renderCardGraph(card);
+  });
+  if (card.merged_into) action("查看合并后的卡片", () => open("cards", card.merged_into));
+  action("删除卡片", () => changeTrash("cards", card.id, true));
+  if (!card.merged_into) action("卡片设置", () => {
+    showCardPanel("卡片设置", trigger);
+    renderCardSettings(card, map);
+  });
+}
+
+function renderDemoCardMenu(card, heading) {
+  const {action, trigger} = cardMenu(heading);
+  action("查看关系图谱", async () => {
+    const current = await json("cards/" + card.id);
+    if (!heading.isConnected) return;
+    showCardPanel("卡片关系", trigger);
+    renderCardGraph(current);
+  });
+}
+
+function renderChildMenu(card, heading, update) {
+  const {action, trigger} = cardMenu(heading);
+  action("编辑卡片", async () => {
+    const current = await json("cards/" + card.id);
+    if (!heading.isConnected) return;
+    showCardPanel("编辑卡片", trigger);
+    const values = editor(current, map);
+    const save = button(map, "保存卡片", async () => {
+      await json("cards/" + card.id, values(), "PUT");
+      await refresh();
+      if (tab === "cards") renderList();
+      await update(data.cards.find(item => item.id === card.id));
+      if (map.contains(save) && !map.hidden) {
+        map.hidden = true;
+        if (trigger.isConnected) trigger.focus({preventScroll:true});
+      }
+      notify("卡片已保存");
+    }, true);
+  });
+  if (card.ai_allowed && !card.archived) action("围绕这张卡提问", () => showChat(null, card.id));
+  action("删除卡片", () => changeTrash("cards", card.id, true));
+  if (card.excerpt) action("查看来源", () => {
+    showCardPanel("卡片来源", trigger);
+    showOrigin(card, map);
+  });
+  action("查看关系图谱", async () => {
+    const current = await json("cards/" + card.id);
+    if (!heading.isConnected) return;
+    showCardPanel("卡片关系", trigger);
+    renderCardGraph(current);
+  });
+}
+
+function cardMenu(heading) {
+  const menu = element("details", null, heading, {className:"card-menu"});
+  const trigger = element("summary", "⋯", menu);
+  trigger.setAttribute("aria-label", "卡片操作");
+  const actions = element("div", null, menu, {className:"card-menu-actions"});
+  const action = (label, run) => button(actions, label, async () => {
+    menu.open = false;
+    trigger.focus();
+    await run();
+  });
+  menu.onkeydown = event => {
+    if (event.key === "Escape" && menu.open) {
+      menu.open = false;
+      trigger.focus();
+      event.stopPropagation();
+    }
+  };
+  menu.onfocusout = event => {
+    if (!menu.contains(event.relatedTarget)) menu.open = false;
+  };
+
+  return {action, trigger};
+}
+
+function showCardPanel(title, trigger) {
+  map.replaceChildren();
+  map.hidden = false;
+  map.setAttribute("aria-label", title);
+  const header = element("div", null, map, {className:"panel-heading"});
+  element("h2", title, header);
+  const dismiss = () => {
+    map.hidden = true;
+    trigger.focus({preventScroll:true});
+  };
+  const close = button(header, "关闭", dismiss);
+  map.onkeydown = event => {
+    if (event.key === "Escape") dismiss();
+  };
+  close.focus();
+}
+
+function renderCardGraph(card) {
   renderGraph(card);
   const expansions = element("div", null, map, {className:"edge-list"});
   button(map, "展开两层邻居", async () => {
@@ -227,6 +528,7 @@ function renderCard(card) {
     drawNetwork(expansions, graph.cards.filter(item => twoHops.has(item.id)),
       graph.edges.filter(edge => twoHops.has(edge.origin) && twoHops.has(edge.target)));
   });
+  if (staticDemo) return;
   const options = data.cards.filter(item => item.id !== card.id && !item.archived).map(item => [item.id, item.title]);
   if (!options.length) return;
   const form = element("details", null, map);
@@ -298,7 +600,74 @@ function renderGraph(card) {
 async function makeDraft(kind, id, excerpt = "") {
   const result = await json("drafts", {kind,id,excerpt});
   await refresh();
-  await open("drafts", result.id);
+  if (kind === "messages") {
+    renderList();
+    notify("候选卡已加入「待审核」");
+  } else await open("drafts", result.id);
+}
+
+async function changeTrash(table, id, deleted) {
+  await json(`trash/${table}/${id}`, {deleted}, "PATCH");
+  await refresh();
+  if (deleted) {
+    const first = data[table].find(item => !item.archived);
+    await open(table, first?.id ?? null);
+    notify("已移到回收站");
+  } else {
+    renderTrash();
+    notify("已恢复");
+  }
+}
+
+function renderTrash() {
+  extraView("回收站");
+  const items = [...data.trash.cards.map(item => ({...item, table:"cards"})),
+    ...data.trash.sources.map(item => ({...item, table:"sources"}))];
+  if (!items.length) element("p", "回收站为空", main);
+  for (const item of items) {
+    const row = element("div", null, main, {className:"actions"});
+    element("span", (item.table === "cards" ? "卡片 · " : "素材 · ") + item.title, row);
+    button(row, "恢复", () => changeTrash(item.table, item.id, false));
+  }
+}
+
+function renderSplit(item, excerpt, panel, proposals) {
+  panel.replaceChildren();
+  element("h2", "拆成多张卡片", panel);
+  element("p", "编辑每张卡的标题和正文。保存时，第一张卡会链接其余各张，其余卡片会链接回第一张。", panel);
+  const rows = element("div", null, panel);
+  const cards = [];
+  function add(proposal = {}) {
+    if (cards.length >= 20) { notify("一次最多生成 20 张卡片"); return; }
+    const group = element("fieldset", null, rows);
+    const title = field(group, "标题", {value:proposal.title || "",maxLength:200});
+    const body = field(group, "正文", {value:proposal.body || "",rows:4,maxLength:47000}, "textarea");
+    const entry = () => ({title:title.value,body:body.value,excerpt:proposal.excerpt || excerpt});
+    cards.push(entry);
+    if (proposal.excerpt) {
+      const source = element("details", null, group);
+      element("summary", "查看原文依据", source);
+      element("p", proposal.excerpt, source, {className:"quote"});
+    }
+    button(group, "移除此卡", () => {
+      cards.splice(cards.indexOf(entry), 1);
+      group.remove();
+    });
+  }
+  proposals.forEach(add);
+  button(panel, "添加一张卡片", () => add());
+  button(panel, "保存并关联", async () => {
+    if (cards.length < 2) { notify("请至少保留两张卡片"); return; }
+    const items = cards.map(read => read());
+    if (items.some(card => !card.title.trim() || !card.body.trim())) {
+      notify("请填写每张卡片的标题和正文");
+      return;
+    }
+    const saved = await json(`sources/${item.id}/split`, {cards:items});
+    await refresh();
+    await open("cards", saved.ids[0]);
+    notify(`已创建并关联 ${saved.ids.length} 张卡片`);
+  }, true);
 }
 
 function renderSource(item) {
@@ -314,6 +683,30 @@ function renderSource(item) {
     derived.forEach(card => button(links, card.title, () => open("cards", card.id)));
     pending.forEach(draft => button(links, "待审核 · " + draft.title, () => open("drafts", draft.id)));
     draftButton(main, body, "sources", item.id);
+    let excerpt = "";
+    const capture = () => {
+      const selection = window.getSelection();
+      excerpt = body.contains(selection.anchorNode) && body.contains(selection.focusNode) ? selection.toString().trim() : "";
+    };
+    body.addEventListener("pointerup", capture);
+    body.addEventListener("keyup", capture);
+    const split = element("section", null, main);
+    const controls = element("div", null, main, {className:"actions"});
+    split.before(controls);
+    const status = element("p", null, main, {className:"muted"});
+    status.setAttribute("role", "status");
+    controls.after(status);
+    button(controls, "AI 拆成多张卡片", async () => {
+      const selected = excerpt;
+      status.textContent = "AI 正在按观点拆卡…";
+      try {
+        const result = await json(`sources/${item.id}/split/preview`, {excerpt:selected});
+        if (split.isConnected) renderSplit(item, selected || item.body, split, result.cards);
+      } finally {
+        status.textContent = "";
+      }
+    });
+    button(controls, "删除素材", () => changeTrash("sources", item.id, true));
     return;
   }
   const title = field(main, "标题");
@@ -386,9 +779,41 @@ function renderDraft(draft) {
   });
 }
 
-function renderChat(chat, jump) {
-  element("h1", chat.title || "与 AI 对话", main);
-  const thread = element("div", null, main);
+function setChatVisible(visible) {
+  chatPanel.hidden = !visible;
+  chatToggle.setAttribute("aria-expanded", String(visible));
+}
+
+async function showChat(id = null, reference = null, jump = null) {
+  if (chatPending) {
+    setChatVisible(true);
+    notify("回复完成后可以切换对话");
+    return;
+  }
+  const token = ++chatRevision;
+  const chat = id ? await json("chats/" + id) : {messages:[]};
+  if (token !== chatRevision) return;
+  chatInitialized = true;
+  setChatVisible(true);
+  renderChat(chat, jump, reference);
+  if (reference) chatPanel.querySelector("textarea").focus({preventScroll:true});
+}
+
+chatToggle.onclick = () => {
+  if (chatInitialized) setChatVisible(chatPanel.hidden);
+  else showChat(data.chats[0]?.id).catch(error => notify(error.message));
+};
+
+function renderChat(chat, jump, reference = null, unsent = "") {
+  const allowed = new Set(aiCards().map(card => card.id));
+  let refs = new Set((reference ? [reference] : chat.messages.at(-1)?.refs || []).filter(id => allowed.has(id)));
+  chatPanel.replaceChildren();
+  const header = element("div", null, chatPanel, {className:"panel-heading"});
+  element("h2", "AI 对话", header);
+  button(header, "关闭", () => { setChatVisible(false); chatToggle.focus(); });
+  const history = select(chatPanel, "对话记录", [["", "新对话"], ...data.chats.map(item => [item.id,item.title])], chat.id);
+  history.onchange = () => showChat(Number(history.value) || null).catch(error => notify(error.message));
+  const thread = element("div", null, chatPanel, {className:"chat-thread"});
   chat.messages.forEach(message => {
     const block = element("article", null, thread, {id:"message-"+message.id});
     element("strong", message.role === "user" ? "你" : "AI", block);
@@ -401,8 +826,11 @@ function renderChat(chat, jump) {
     message.cards.forEach(card => button(actions, "已保存｜" + card.title, () => open("cards", card.id)));
     if (message.role === "assistant") draftButton(actions, body, "messages", message.id);
   });
-  element("h2", "本轮参考卡", main);
-  const referenceList = element("div", null, main, {className:"references"});
+  const context = element("details", null, chatPanel, {open:!!reference});
+  const summary = element("summary", null, context);
+  const updateSummary = () => { summary.textContent = "参考卡 · " + refs.size + " 张"; };
+  updateSummary();
+  const referenceList = element("div", null, context, {className:"references"});
   if (!aiCards().length) element("p", "卡库里暂无可供 AI 引用的卡片。", referenceList, {className:"muted"});
   aiCards().forEach(card => {
     const label = element("label", null, referenceList);
@@ -414,10 +842,11 @@ function renderChat(chat, jump) {
         notify("每轮最多选 8 张卡片");
       } else if (checkbox.checked) refs.add(card.id);
       else refs.delete(card.id);
+      updateSummary();
     };
   });
-  const input = field(main, "你的问题", {rows:3,placeholder:"从一个值得追问的问题开始",maxLength:8000}, "textarea");
-  button(main, "从卡库找参考卡", async () => {
+  const input = field(chatPanel, "你的问题", {value:unsent, rows:3,placeholder:"从一个值得追问的问题开始",maxLength:8000}, "textarea");
+  button(chatPanel, "从卡库找参考卡", async () => {
     const result = await json("search", {query:input.value.trim()});
     const picks = result.cards.slice(0, 8);
     if (!picks.length) { notify("没有找到相关卡片"); return; }
@@ -425,11 +854,15 @@ function renderChat(chat, jump) {
     referenceList.querySelectorAll("input").forEach((control, index) => {
       control.checked = refs.has(aiCards()[index].id);
     });
+    updateSummary();
     notify(result.semantic ? "已选中相关卡片，可在发送前调整" : "已按关键词选中卡片，可在发送前调整");
   });
-  button(main, "发送问题", async () => {
+  button(chatPanel, "发送问题", async () => {
     if (!input.value.trim()) { input.focus(); return; }
-    busy = true;
+    if (chatPending) return;
+    chatPending = true;
+    history.disabled = true;
+    input.disabled = true;
     let chatId = chat.id;
     const question = input.value.trim();
     element("p", question, thread, {className:"message user"});
@@ -454,6 +887,7 @@ function renderChat(chat, jump) {
           if (part.delta) {
             if (!started) answer.textContent = "";
             answer.textContent += part.delta;
+            thread.scrollTop = thread.scrollHeight;
             started = true;
           }
           if (part.message_id) complete = true;
@@ -463,13 +897,22 @@ function renderChat(chat, jump) {
     } catch (error) {
       notify(error.message);
     } finally {
-      busy = false;
-      await refresh();
-      await open("chats", chatId || null);
-      if (!complete) main.querySelector("textarea").value = question;
+      try {
+        await refresh();
+        const saved = chatId ? await json("chats/" + chatId) : chat;
+        renderChat(saved, null, null, complete ? "" : question);
+      } finally {
+        chatPending = false;
+        history.disabled = false;
+        input.disabled = false;
+      }
     }
   }, true);
-  if (jump) requestAnimationFrame(() => document.getElementById("message-"+jump)?.scrollIntoView({block:"center"}));
+  thread.scrollTop = thread.scrollHeight;
+  if (jump) {
+    const message = document.getElementById("message-"+jump);
+    if (message) thread.scrollTop += message.getBoundingClientRect().top - thread.getBoundingClientRect().top;
+  }
 }
 
 const modelDialog = find("#model-dialog");
@@ -541,14 +984,15 @@ modelDialog.onclose = () => { modelFields.api_key.value = ""; };
 document.querySelectorAll("[data-tab]").forEach(node => {
   node.onclick = () => {
     const next = node.dataset.tab;
-    open(next, (next === "cards" ? data.cards.find(card => !card.archived) : data[next][0])?.id ?? null).catch(error => notify(error.message));
+    const first = data[next]?.[0];
+    (next === "cards" ? open("cards", null, {browse:true}) : open(next, first?.id ?? null)).catch(error => notify(error.message));
   };
 });
 find("#new").onclick = () => open(tab).catch(error => notify(error.message));
-search.oninput = renderList;
+search.oninput = updateCardFilter;
 try {
   await refresh();
-  await open("cards", data.cards.find(card => !card.archived)?.id ?? null);
+  await open("home");
 } catch (error) {
   notify(error.message);
 }
@@ -560,8 +1004,8 @@ function checkbox(parent, title, checked) {
   return input;
 }
 
-function renderCardSettings(card) {
-  const settings = element("details", null, main);
+function renderCardSettings(card, parent) {
+  const settings = element("details", null, parent, {open:true});
   element("summary", "标签、归档和 AI 检索", settings);
   const tags = field(settings, "标签（用逗号分隔）", {value:card.tags.join(", ")});
   const archived = checkbox(settings, "归档卡片", !!card.archived);
@@ -588,6 +1032,24 @@ function renderCardSettings(card) {
 }
 
 function renderTopic(topic) {
+  if (staticDemo) {
+    element("h1", topic.title || "主题", main);
+    if (!topic.id) {
+      element("p", "快照中没有已保存的主题。", main);
+      return;
+    }
+    if (topic.question) element("p", topic.question, main);
+    if (topic.body) {
+      const content = element("div", null, main, {className:"markdown"});
+      void previewMarkdown(content, topic.body, json).catch(error => notify(error.message));
+    }
+    const list = element("ol", null, main);
+    for (const id of topic.card_ids) {
+      const card = data.cards.find(item => item.id === id);
+      if (card) button(element("li", null, list), card.title, () => open("cards", id));
+    }
+    return;
+  }
   element("h1", topic.title || "新建主题", main);
   const title = field(main, "主题名称", {value:topic.title || "",maxLength:200});
   const question = field(main, "要回答的问题", {value:topic.question || "",maxLength:8000});
@@ -597,7 +1059,7 @@ function renderTopic(topic) {
     const content = element("div", null, panel);
     panel.ontoggle = async () => {
       if (!panel.open || content.childNodes.length) return;
-      const path = createReadingPath(content, json, () => data.cards, notify, id => open("cards", id));
+      const path = createReadingPath(content, json, () => data.cards, notify, id => open("cards", id), null, renderChildMenu);
       const nodes = [];
       for (const entry of topic.reading_path) {
         const card = data.cards.find(item => item.id === entry.card_id);
@@ -681,38 +1143,52 @@ function drawNetwork(parent, cards, edges) {
 }
 
 function extraView(title) {
+  browsingCards = false;
+  main.hidden = false;
+  find(".catalog").append(searchBox);
+  renderList();
   ++revision;
+  setChatVisible(false);
   main.replaceChildren();
+  map.hidden = true;
   map.replaceChildren();
   element("h1", title, main);
 }
 
-async function globalGraph() {
-  if (busy) return;
-  extraView("全局图谱");
-  const tag = select(main, "标签", [["","全部标签"], ...choiceList(availableTags())]);
-  const kind = select(main, "关系类型", [["","全部关系"], ...choiceList([...relationTypes, "正文引用"])]);
-  const display = element("div", null, main);
+async function renderGlobalGraph(parent, preview) {
+  element("h1", "全局图谱", parent);
+  const filters = element("div", null, parent, {className:"graph-filters"});
+  const tag = select(filters, "标签", [["","全部标签"], ...choiceList(availableTags())]);
+  const kind = select(filters, "关系类型", [["","全部关系"], ...choiceList([...relationTypes, "正文引用"])]);
+  const display = element("div", null, parent);
+  let requestId = 0;
   async function update() {
+    const token = ++requestId;
     const graph = await json("graph?" + new URLSearchParams({tag:tag.value,kind:kind.value}));
-    if (!display.isConnected) return;
+    if (!display.isConnected || token !== requestId) return;
     display.replaceChildren();
-    element("p", `${graph.cards.length} 张卡片，${graph.groups.length} 个关联群组`, display);
-    const cards = new Map(graph.cards.map(card => [card.id,card]));
-    graph.groups.forEach((group,index) => {
-      const section = element("details", null, display, {open:index === 0});
-      element("summary", group.label + " · " + group.ids.length + " 张卡片", section);
-      const ids = new Set(group.ids);
-      drawNetwork(section, group.ids.map(id => cards.get(id)),
-        graph.edges.filter(edge => ids.has(edge.origin) && ids.has(edge.target)));
+    preview.hidden = true;
+    element("p", `${graph.cards.length} 张卡片，${graph.groups.length} 个关联群组`, display, {className:"muted"});
+    if (!graph.cards.length) {
+      element("p", "当前筛选下没有卡片", display);
+      return;
+    }
+    drawConstellation(display, graph, svgNode, node => {
+      preview.replaceChildren();
+      preview.hidden = false;
+      const card = data.cards.find(item => item.id === node.id);
+      element("h2", node.title, preview);
+      if (card) element("p", cardSnippet(card.body, ""), preview, {className:"muted"});
+      button(preview, "打开卡片", () => open("cards", node.id), true);
     });
   }
   tag.onchange = kind.onchange = () => update().catch(error => notify(error.message));
-  await update();
+  await update().catch(error => {
+    if (display.isConnected) element("p", error.message, display, {role:"status"});
+  });
 }
 
 function dataTools() {
-  if (busy) return;
   extraView("备份与恢复");
   element("p", "备份包含卡片、素材、对话、候选卡、关系和主题。模型配置与密钥单独保存在本机。", main);
   element("a", "下载知识库备份", main, {href:"/api/backup"});
@@ -734,5 +1210,15 @@ function dataTools() {
   });
 }
 
-find("#global-graph").onclick = () => globalGraph().catch(error => notify(error.message));
 find("#data-tools").onclick = dataTools;
+
+find("header nav").onclick = event => {
+  const menu = event.target.closest("button, a")?.closest(".top-menu");
+  if (menu) menu.open = false;
+};
+
+for (const view of ["sources", "drafts"]) {
+  find("#inbox-" + view).onclick = () => open(view, data[view][0]?.id ?? null).catch(error => notify(error.message));
+}
+
+find("#trash").onclick = renderTrash;

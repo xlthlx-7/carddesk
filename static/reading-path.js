@@ -48,9 +48,8 @@ export function attachReferencePicker(body, panel, cards) {
   });
 }
 
-export function createReadingPath(container, request, cards, notify, openCard) {
+export function createReadingPath(container, request, cards, notify, openCard, onChange, childMenu) {
   const roots = [];
-  let count = 0;
 
   function focus(node) {
     node.article.focus({preventScroll:true});
@@ -67,44 +66,80 @@ export function createReadingPath(container, request, cards, notify, openCard) {
     article ||= document.createElement("article");
     article.classList.add("markdown", "reading-card");
     article.tabIndex = -1;
+    let title;
+    let headingRow;
     if (parent || !article.isConnected) {
+      headingRow = document.createElement("div");
+      headingRow.className = "card-heading";
       const heading = document.createElement("h2");
-      heading.textContent = card.title;
       const open = document.createElement("button");
       open.type = "button";
-      open.textContent = "打开卡片";
+      title = open;
+      title.textContent = card.title;
+      open.className = "reading-card-title";
+      open.title = "打开卡片";
       open.onclick = () => openCard(card.id).catch(error => notify(error.message));
-      column.append(heading, open);
+      heading.append(open);
+      headingRow.append(heading);
+      column.append(headingRow);
     }
     const childrenPanel = document.createElement("div");
     childrenPanel.className = "reading-children";
     column.append(article, childrenPanel);
     (parent?.childrenPanel || container).append(column);
-    const node = {card, parent, article, childrenPanel, children:[]};
+    const node = {card, parent, article, column, childrenPanel, children:[]};
     host.push(node);
-    count += 1;
-    try {
-      await previewMarkdown(article, card.body, request, async (reference, control) => {
-        const target = referenceTarget(reference, cards());
-        if (!target) { notify("找不到唯一的引用卡片，请核对标题或重新选择卡片"); return; }
-        for (let ancestor = node; ancestor; ancestor = ancestor.parent) {
-          if (ancestor.card.id === target.id) { focus(ancestor); return; }
-        }
-        const opened = node.children.find(child => child.card.id === target.id);
-        if (opened) { focus(opened); return; }
-        if (count >= 100) { notify("阅读路径最多展开 100 张卡片"); return; }
-        control.disabled = true;
-        try {
-          if (container.isConnected) focus(await append(target, node));
-        } finally {
-          control.disabled = false;
-        }
-      });
-    } catch (error) {
-      article.textContent = card.body;
-      notify(error.message);
-    }
+    if (parent && childMenu) childMenu(card, headingRow, async updated => {
+      node.card = updated;
+      title.textContent = updated.title;
+      await render();
+    });
+    await render();
     return node;
+
+    async function render() {
+      try {
+        await previewMarkdown(article, node.card.body, request, async (reference, control) => {
+          const target = referenceTarget(reference, cards());
+          if (!target) { notify("找不到唯一的引用卡片，请核对标题或重新选择卡片"); return; }
+          for (let ancestor = node; ancestor; ancestor = ancestor.parent) {
+            if (ancestor.card.id === target.id) { focus(ancestor); return; }
+          }
+          const opened = node.children.find(child => child.card.id === target.id);
+          if (opened) {
+            node.children.splice(node.children.indexOf(opened), 1);
+            opened.column.remove();
+            syncControls(node);
+            onChange?.();
+            return;
+          }
+          if (entries().length >= 100) { notify("阅读路径最多展开 100 张卡片"); return; }
+          control.disabled = true;
+          try {
+            if (!container.isConnected) return;
+            const expanded = await append(target, node);
+            if (expanded.column.isConnected) {
+              syncControls(node);
+              onChange?.();
+              focus(expanded);
+            }
+          } finally {
+            control.disabled = false;
+          }
+        });
+        syncControls(node);
+      } catch (error) {
+        article.textContent = node.card.body;
+        notify(error.message);
+      }
+    }
+  }
+
+  function syncControls(node) {
+    for (const control of node.article.querySelectorAll("button.card-reference")) {
+      const target = referenceTarget(control.dataset.reference, cards());
+      control.setAttribute("aria-expanded", String(node.children.some(child => child.card.id === target?.id)));
+    }
   }
 
   function entries() {
@@ -118,5 +153,18 @@ export function createReadingPath(container, request, cards, notify, openCard) {
     return result;
   }
 
-  return {append, entries};
+  async function restore(root, article, saved) {
+    const nodes = [await append(root, null, article)];
+    const library = cards();
+    for (const entry of saved.slice(1, 100)) {
+      if (!container.isConnected) return;
+      const parent = nodes[entry?.parent];
+      const card = library.find(item => item.id === entry?.card_id);
+      const node = parent && card ? await append(card, parent) : null;
+      nodes.push(node);
+    }
+    nodes.filter(Boolean).forEach(syncControls);
+  }
+
+  return {append, entries, restore};
 }

@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from typing import Literal
 
 import httpx
 
@@ -22,6 +23,7 @@ CREATE TABLE IF NOT EXISTS topics (
 """
 COLUMNS = {
     "tags": "TEXT NOT NULL DEFAULT '[]'",
+    "deleted": "INTEGER NOT NULL DEFAULT 0",
     "archived": "INTEGER NOT NULL DEFAULT 0",
     "ai_allowed": "INTEGER NOT NULL DEFAULT 1",
     "merged_into": "INTEGER REFERENCES cards(id)",
@@ -35,6 +37,8 @@ def migrate(db):
     for name, definition in COLUMNS.items():
         if name not in existing:
             db.execute(f"ALTER TABLE cards ADD COLUMN {name} {definition}")
+    if "deleted" not in {row["name"] for row in db.execute("PRAGMA table_info(sources)")}:
+        db.execute("ALTER TABLE sources ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0")
     if "reading_path" not in {row["name"] for row in db.execute("PRAGMA table_info(topics)")}:
         db.execute("ALTER TABLE topics ADD COLUMN reading_path TEXT NOT NULL DEFAULT '[]'")
 
@@ -44,11 +48,11 @@ def card_view(row):
 
 
 def all_cards(db):
-    return [card_view(row) for row in db.execute("SELECT * FROM cards ORDER BY id DESC")]
+    return [card_view(row) for row in db.execute("SELECT * FROM cards WHERE deleted=0 ORDER BY id DESC")]
 
 
 def can_send(card):
-    return card["ai_allowed"] and not card["archived"]
+    return card["ai_allowed"] and not card["archived"] and not card["deleted"]
 
 
 class Search(BaseModel):
@@ -124,6 +128,8 @@ def restore(db, payload):
         if not isinstance(rows, list):
             raise ValueError()
         for row in rows:
+            if table in {"cards", "sources"} and isinstance(row, dict) and "deleted" not in row:
+                row = {**row, "deleted": 0}
             if table == "topics" and isinstance(row, dict) and "reading_path" not in row:
                 row = {**row, "reading_path": "[]"}
             if not isinstance(row, dict) or set(row) != set(names):
@@ -162,8 +168,82 @@ def restore(db, payload):
             start = cards[start]
 
 
+class TrashState(BaseModel):
+    deleted: bool
+
+
+class SplitCard(BaseModel):
+    title: str = Field(min_length=1, max_length=200, pattern=r"\S")
+    body: str = Field(min_length=1, max_length=47000, pattern=r"\S")
+    excerpt: str = Field(default="", max_length=50000)
+
+
+class SplitRequest(BaseModel):
+    excerpt: str = Field(default="", max_length=50000)
+
+
+class SplitSource(BaseModel):
+    cards: list[SplitCard] = Field(min_length=2, max_length=20)
+
+
 def routes(database, get):
     router = APIRouter(prefix="/api")
+
+    @router.patch("/trash/{table}/{item_id}")
+    def trash(table: Literal["cards", "sources"], item_id: int, payload: TrashState):
+        with database() as db:
+            get(db, table, item_id)
+            db.execute(f"UPDATE {table} SET deleted=? WHERE id=?", (payload.deleted, item_id))
+        return {"id": item_id}
+
+    @router.post("/sources/{source_id}/split/preview")
+    async def preview_split(source_id: int, payload: SplitRequest):
+        with database() as db:
+            source = get(db, "sources", source_id)
+        if source["deleted"]:
+            raise HTTPException(409, "请先恢复素材")
+        excerpt = payload.excerpt.strip() or source["body"]
+        if excerpt not in source["body"]:
+            raise HTTPException(422, "选区与原素材不符，请重新选择")
+        config = ai.settings()
+        if not config.model:
+            raise HTTPException(409, "请先在「设置与数据」中启用模型")
+        try:
+            result = await ai.split_cards(excerpt, config)
+            if isinstance(result, dict) and result.get("cards") == []:
+                raise HTTPException(422, "这段素材不足以拆成两张卡片，请扩大选区")
+            draft = SplitSource.model_validate(result)
+            if any(not card.excerpt.strip() or card.excerpt not in excerpt for card in draft.cards):
+                raise ValueError("invalid source excerpt")
+        except (httpx.HTTPError, ValueError, TypeError, KeyError, IndexError, AttributeError):
+            raise HTTPException(502, "AI 未返回可核对的拆卡结果，请重试或缩短选区")
+        return draft
+
+    @router.post("/sources/{source_id}/split")
+    def split_source(source_id: int, payload: SplitSource):
+        with database() as db:
+            db.execute("BEGIN IMMEDIATE")
+            source = get(db, "sources", source_id)
+            if source["deleted"]:
+                raise HTTPException(409, "请先恢复素材")
+            for card in payload.cards:
+                if card.excerpt and card.excerpt not in source["body"]:
+                    raise HTTPException(422, "卡片摘录须来自原素材")
+            ids = [db.execute("""INSERT INTO cards(title,body,kind,source_id,excerpt)
+                VALUES (?,?,'观点',?,?)""",
+                (card.title.strip(), card.body.strip(), source_id, card.excerpt)).lastrowid
+                for card in payload.cards]
+            for index, card in enumerate(payload.cards):
+                targets = range(1, len(ids)) if index == 0 else [0]
+                refs = []
+                for target in targets:
+                    title = payload.cards[target].title.strip().translate(str.maketrans("[]|\r\n", "     "))
+                    refs.append(f"- [[#{ids[target]}|{title.strip() or '相关卡片'}]]")
+                body = card.body.strip() + "\n\n### 相关卡片\n" + "\n".join(refs)
+                if len(body) > 50000:
+                    raise HTTPException(422, "正文和引用合计超过卡片长度上限")
+                db.execute("UPDATE cards SET body=? WHERE id=?", (body, ids[index]))
+        return {"ids": ids}
 
     @router.post("/sources/extract")
     async def extract(payload: WebAddress):
@@ -190,7 +270,7 @@ def routes(database, get):
             source = card_view(get(db, "cards", payload.source))
             if source["merged_into"] == card_id:
                 return {"id": card_id}
-            if card_id == source["id"] or target["archived"] or source["archived"]:
+            if card_id == source["id"] or target["archived"] or source["archived"] or target["deleted"] or source["deleted"]:
                 raise HTTPException(409, "请选择两张不同的未归档卡片")
             body = target["body"] + "\n\n---\n\n" + source["body"]
             tags = list(dict.fromkeys(target["tags"] + source["tags"]))

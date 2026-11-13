@@ -156,9 +156,12 @@ def library(q: str = ""):
         cards = [card for card in all_cards(db) if not query or query in
                  (card["title"] + "\n" + card["body"] + "\n" + " ".join(card["tags"])).casefold()]
         topics = [topic_view(row) for row in db.execute("SELECT * FROM topics ORDER BY id DESC")]
-        return {"cards": cards, "topics": topics, "demo": not ai.settings().model, **{
+        return {"cards": cards, "topics": topics, "demo": not ai.settings().model, "trash": {
+            table: [dict(row) for row in db.execute(f"SELECT id,title FROM {table} WHERE deleted=1 ORDER BY id DESC")]
+            for table in ("cards", "sources")
+        }, **{
             table: [dict(row) for row in db.execute(f"SELECT * FROM {table} {where} ORDER BY id DESC")]
-            for table, where in [("sources", ""), ("chats", ""), ("drafts", "WHERE status='pending'")]
+            for table, where in [("sources", "WHERE deleted=0"), ("chats", ""), ("drafts", "WHERE status='pending'")]
         }}
 
 
@@ -185,7 +188,7 @@ def detail(card_id: int):
         edges = [dict(row) for row in db.execute(
             """SELECT l.*, c.id AS neighbor, c.title AS title
                FROM links l JOIN cards c ON c.id=CASE WHEN l.origin=? THEN l.target ELSE l.origin END
-               WHERE l.origin=? OR l.target=? ORDER BY l.id""", (card_id, card_id, card_id)
+               WHERE c.deleted=0 AND (l.origin=? OR l.target=?) ORDER BY l.id""", (card_id, card_id, card_id)
         )]
         cards = all_cards(db)
         by_id = {item["id"]: item for item in cards}
@@ -222,7 +225,7 @@ def history(chat_id: int):
         saved_cards = {}
         for card in db.execute(
             """SELECT c.id,c.title,c.message_id FROM cards c
-               JOIN messages m ON m.id=c.message_id WHERE m.chat_id=? ORDER BY c.id""", (chat_id,)
+               JOIN messages m ON m.id=c.message_id WHERE m.chat_id=? AND c.deleted=0 ORDER BY c.id""", (chat_id,)
         ):
             saved_cards.setdefault(card["message_id"], []).append(dict(card))
         return {**chat, "messages": [
@@ -252,7 +255,7 @@ async def chat(turn: Turn):
         prior = db.execute(
             "SELECT role,body,refs FROM messages WHERE chat_id=? ORDER BY id DESC LIMIT 12", (chat_id,)
         ).fetchall()
-        eligible = {row["id"] for row in db.execute("SELECT id FROM cards WHERE ai_allowed=1 AND archived=0")}
+        eligible = {row["id"] for row in db.execute("SELECT id FROM cards WHERE ai_allowed=1 AND archived=0 AND deleted=0")}
         prior = [row for row in prior if set(json.loads(row["refs"])) <= eligible]
         question_id = db.execute(
             "INSERT INTO messages(chat_id,role,body,refs) VALUES(?,?,?,?)",
@@ -293,6 +296,8 @@ async def chat(turn: Turn):
 async def draft(request: DraftRequest):
     with database() as db:
         origin = get(db, request.kind, request.id)
+        if origin.get("deleted"):
+            raise HTTPException(409, "请先恢复素材")
         if request.kind == "messages" and origin["role"] != "assistant":
             raise HTTPException(400, "请选择一条 AI 回复")
         question = get(db, "messages", origin["question_id"])["body"] if origin.get("question_id") else ""
@@ -364,7 +369,7 @@ def add_link(link: Link):
 @app.get("/api/export")
 def export():
     with database() as db:
-        cards = db.execute("SELECT * FROM cards ORDER BY id").fetchall()
+        cards = db.execute("SELECT * FROM cards WHERE deleted=0 ORDER BY id").fetchall()
         lines = ["# 知识卡片"]
         for card in cards:
             lines += [f"## {card['title']} [#{card['id']}]", f"类型：{card['kind']}", card["body"]]
