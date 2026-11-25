@@ -1,0 +1,9 @@
+{
+  "id": "carddesk",
+  "name": "接页 Carddesk",
+  "version": "0.3.4",
+  "minAppVersion": "1.8.7",
+  "description": "渐进阅读：Agent 说明导出、卡片包只读校验与示例。",
+  "author": "Carddesk",
+  "isDesktopOnly": true
+}

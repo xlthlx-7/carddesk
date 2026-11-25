@@ -1,5 +1,25 @@
 # 接页 · 知识卡片工作台 v0.2
 
+## Obsidian 插件与本地检索（当前开发方向）
+
+当前版本为 0.3.4：在同一视图渐进展开 Markdown 内链、保存/恢复阅读路径，并导出本地 Agent 文件协作说明；检索工具复用 QMD，不在插件内接生成 API。
+
+- [插件安装与开发](obsidian-plugin/README.md)、[文件协议](docs/AGENT_CARD_PROTOCOL.md)
+- [本地检索工具](search/README.md)、[交付说明](release/DELIVERY_README.md)
+
+构建插件和本地测试交付包：
+
+```sh
+npm ci --prefix obsidian-plugin
+npm run build --prefix obsidian-plugin
+python3 release/build.py
+python3 release/verify.py dist/carddesk-0.3.4-test
+```
+
+公开仓库只包含源码、通用说明、锁文件与原创示例。个人测试 Vault、用户材料及加工全文、材料相关评测题集/报告、决策日志、模型、缓存和原始运行证据保留本地，不随源码公开。原创 P4 示例从 `obsidian-plugin/fixtures/vault/` 构建，不依赖个人库。
+
+以下保留早期独立 Web 应用的运行方式。
+
 适用于个人本地使用。功能分版和实现见 [PLAN.md](PLAN.md)。
 
 ## 启动

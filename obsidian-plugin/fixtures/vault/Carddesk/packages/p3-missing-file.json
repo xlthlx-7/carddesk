@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "packageId": "p3-missing",
+  "title": "渐进阅读示例",
+  "entry": "Cards/P3/入口.md",
+  "files": [
+    "Cards/P3/入口.md",
+    "Cards/P3/缺失.md"
+  ],
+  "sources": [
+    "Sources/P3/渐进阅读示例.md"
+  ]
+}

@@ -1,11 +1,11 @@
 import {drawConstellation} from "./constellation.js";
 import {attachReferencePicker, createReadingPath} from "./reading-path.js";
 import {previewMarkdown} from "./preview.js";
-import {demoRequest} from "./demo.js";
+import {demoRequest, demoChat} from "./demo.js";
 const find = (selector) => document.querySelector(selector);
 const staticDemo = document.documentElement.dataset.staticDemo === "true";
 if (staticDemo) {
-  for (const selector of ["#inbox-tab", "#model-settings", "#data-tools", "#trash", "#chat-toggle"]) {
+  for (const selector of ["#data-tools", "#trash"]) {
     find(selector).hidden = true;
   }
 }
@@ -42,6 +42,7 @@ function notify(message) {
 }
 
 async function api(path, body, method = "POST") {
+  if (staticDemo && path === "chat") return demoChat(body);
   const response = await fetch("/api/" + path, body === undefined ? {} : {
     method, headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)
   });
@@ -134,7 +135,9 @@ function renderHome() {
     if (data.drafts.length) button(section, `待审核 · ${data.drafts.length}`, () => open("drafts", data.drafts[0].id));
   }
   if (staticDemo) {
-    element("p", "公开演示 · 只读快照", home, {className:"muted"});
+    element("p", "AI 功能由浏览器模拟，刷新后恢复初始数据。", home, {className:"muted"});
+    button(home, "试用 AI 对话", () => showChat());
+    button(home, "试用 AI 拆卡", () => open("sources", data.sources[0].id));
     const index = data.cards.find(item => item.tags.includes("索引"));
     if (index) button(home, "打开学习索引", () => open("cards", index.id), true);
     return;
@@ -431,6 +434,11 @@ function renderCard(card, previous) {
 
 function renderDemoCardMenu(card, heading) {
   const {action, trigger} = cardMenu(heading);
+  if (!card.archived) action("围绕这张卡提问", () => showChat(null, card.id));
+  if (card.excerpt) action("查看来源", () => {
+    showCardPanel("卡片来源", trigger);
+    showOrigin(card, map);
+  });
   action("查看关系图谱", async () => {
     const current = await json("cards/" + card.id);
     if (!heading.isConnected) return;
@@ -600,7 +608,7 @@ function renderGraph(card) {
 async function makeDraft(kind, id, excerpt = "") {
   const result = await json("drafts", {kind,id,excerpt});
   await refresh();
-  if (kind === "messages") {
+  if (kind === "messages" && !staticDemo) {
     renderList();
     notify("候选卡已加入「待审核」");
   } else await open("drafts", result.id);
@@ -706,7 +714,7 @@ function renderSource(item) {
         status.textContent = "";
       }
     });
-    button(controls, "删除素材", () => changeTrash("sources", item.id, true));
+    if (!staticDemo) button(controls, "删除素材", () => changeTrash("sources", item.id, true));
     return;
   }
   const title = field(main, "标题");
@@ -811,6 +819,7 @@ function renderChat(chat, jump, reference = null, unsent = "") {
   const header = element("div", null, chatPanel, {className:"panel-heading"});
   element("h2", "AI 对话", header);
   button(header, "关闭", () => { setChatVisible(false); chatToggle.focus(); });
+  if (staticDemo) element("p", "模拟回复 · 根据参考卡生成示例，内容仅保留到刷新页面。", chatPanel, {className:"muted"});
   const history = select(chatPanel, "对话记录", [["", "新对话"], ...data.chats.map(item => [item.id,item.title])], chat.id);
   history.onchange = () => showChat(Number(history.value) || null).catch(error => notify(error.message));
   const thread = element("div", null, chatPanel, {className:"chat-thread"});
@@ -964,6 +973,10 @@ async function submitModel(test) {
 }
 
 find("#model-settings").onclick = async () => {
+  if (staticDemo) {
+    notify("演示使用浏览器内置的模拟模型，无需填写接口地址或密钥。");
+    return;
+  }
   try {
     showModel(await json("settings/model"));
     modelResult.textContent = "";

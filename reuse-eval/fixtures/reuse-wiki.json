@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "packageId": "reuse-wiki-v1",
+  "title": "Skill 与 QMD 复用验证",
+  "entry": "ReuseWiki/wiki/reading/entry.md",
+  "files": [
+    "ReuseWiki/wiki/reading/cognitive-load.md",
+    "ReuseWiki/wiki/reading/entry.md",
+    "ReuseWiki/wiki/reading/maintenance.md",
+    "ReuseWiki/wiki/reading/provenance.md",
+    "ReuseWiki/wiki/reading/relations.md",
+    "ReuseWiki/wiki/reading/retrieval.md"
+  ],
+  "sources": [
+    "ReuseWiki/raw/reading/lecture.md"
+  ]
+}

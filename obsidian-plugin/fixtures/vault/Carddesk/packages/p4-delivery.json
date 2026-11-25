@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "packageId": "p4-delivery-workflow",
+  "title": "P4 交付流程演练",
+  "entry": "P4/Cards/入口.md",
+  "files": [
+    "P4/Cards/入口.md",
+    "P4/Cards/离线与回退.md",
+    "P4/Cards/数据保护.md"
+  ],
+  "sources": [
+    "P4/Sources/交付说明.md",
+    "Sources/P3/渐进阅读示例.md"
+  ]
+}

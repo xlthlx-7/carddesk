@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "packageId": "p3-progressive-v1",
+  "title": "渐进阅读示例",
+  "entry": "Cards/P3/入口.md",
+  "files": [
+    "Cards/P3/入口.md",
+    "Cards/P3/卡片边界.md",
+    "Cards/P3/自然链接.md",
+    "Cards/P3/认知负担.md",
+    "Cards/P3/来源.md",
+    "Cards/P3/适用边界.md",
+    "Cards/P3/共享概念.md",
+    "Cards/P3/例子.md",
+    "Cards/P3/分歧.md",
+    "Cards/P3/检查理解.md"
+  ],
+  "sources": [
+    "Sources/P3/渐进阅读示例.md"
+  ]
+}

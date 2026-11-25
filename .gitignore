@@ -7,3 +7,27 @@ __pycache__/
 *.ai.json
 .model-*
 dist/
+.reuse-eval/
+tmp/pdfs/
+.carddesk-search/
+
+# Local evaluation artifacts and user-provided material; source/scripts stay tracked.
+docs/validation/
+docs/evaluation/*/run*/
+docs/evaluation/*/*.json
+!docs/evaluation/*/dataset*.json
+docs/evaluation/*/*.log
+docs/evaluation/*/core-initial.mjs.txt
+reuse-eval/aipm/results/
+reuse-eval/aipm/cards.json
+.env
+.env.*
+!.env.example
+.DS_Store
+reuse-eval/results/
+
+# Public source upload excludes material-specific assessments and private work logs.
+docs/*
+!docs/AGENT_CARD_PROTOCOL.md
+reuse-eval/aipm/*
+!reuse-eval/aipm/download-model.sh
