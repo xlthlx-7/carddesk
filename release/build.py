@@ -5,6 +5,7 @@ ROOT=Path(__file__).resolve().parent.parent
 VERSION=json.loads((ROOT/'obsidian-plugin/manifest.json').read_text())['version']
 parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--output',type=Path,help='Output folder; only explicit public assets enter the manifest')
+parser.add_argument('--source-commit',help='Runtime source commit for a packaging-only release correction')
 args=parser.parse_args()
 OUT=(args.output or ROOT/'dist'/f'carddesk-{VERSION}-test').resolve();OUT.mkdir(parents=True,exist_ok=True)
 def digest(p):return hashlib.sha256(p.read_bytes()).hexdigest()
@@ -27,15 +28,17 @@ items.extend((s,'Carddesk示例库/.obsidian/plugins/'+n) for s,n in plugin)
 items.append((ROOT/'release/DELIVERY_README.md','Carddesk示例库/开始使用.md'))
 items.append((ROOT/'release/KNOWN_LIMITATIONS.md','Carddesk示例库/KNOWN_LIMITATIONS.md'))
 pack(f'carddesk-example-vault-{VERSION}.zip',items)
-shutil.copy2(ROOT/'release/DELIVERY_README.md',OUT/'开始使用.md')
-shutil.copy2(ROOT/'release/verify.py',OUT/'校验发布包.py')
+shutil.copy2(ROOT/'release/DELIVERY_README.md',OUT/'INSTALL.md')
+shutil.copy2(ROOT/'release/verify.py',OUT/'verify-release.py')
 shutil.copy2(ROOT/'release/KNOWN_LIMITATIONS.md',OUT/'KNOWN_LIMITATIONS.md')
 model={'id':'Qwen/Qwen3-Embedding-0.6B-GGUF','file':'Qwen3-Embedding-0.6B-Q8_0.gguf','bytes':639150592,'sha256':'06507c7b42688469c4e7298b0a1e16deff06caf291cf0a5b278c308249c3e439','officialUrl':'https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF/resolve/main/Qwen3-Embedding-0.6B-Q8_0.gguf','weightsIncluded':False}
 (OUT/'MODEL.json').write_text(json.dumps(model,ensure_ascii=False,indent=2)+'\n')
-asset_names=[f'carddesk-plugin-{VERSION}.zip',f'carddesk-tools-{VERSION}.zip',f'carddesk-example-vault-{VERSION}.zip','开始使用.md','校验发布包.py','KNOWN_LIMITATIONS.md','MODEL.json']
+asset_names=[f'carddesk-plugin-{VERSION}.zip',f'carddesk-tools-{VERSION}.zip',f'carddesk-example-vault-{VERSION}.zip','INSTALL.md','verify-release.py','KNOWN_LIMITATIONS.md','MODEL.json']
 try: source_commit=subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD'],text=True,stderr=subprocess.DEVNULL).strip()
 except (OSError,subprocess.CalledProcessError): source_commit=None
-manifest={'version':VERSION,'kind':'github-prerelease','sourceCommit':source_commit,'acceptanceStatus':'passed-scoped-local-test','scope':'P4 install/offline/fallback/workflow; quality/scale tasks deferred','files':{n:{'sha256':digest(OUT/n),'bytes':(OUT/n).stat().st_size} for n in asset_names}}
+if args.source_commit and (len(args.source_commit)!=40 or any(c not in '0123456789abcdef' for c in args.source_commit)):
+ parser.error('--source-commit must be a full lowercase Git SHA')
+manifest={'version':VERSION,'kind':'github-prerelease','sourceCommit':args.source_commit or source_commit,'packagingCommit':source_commit,'acceptanceStatus':'passed-scoped-local-test','scope':'P4 install/offline/fallback/workflow; quality/scale tasks deferred','files':{n:{'sha256':digest(OUT/n),'bytes':(OUT/n).stat().st_size} for n in asset_names}}
 manifest['archiveContents']={}
 for name in asset_names:
  if not name.endswith('.zip'):continue

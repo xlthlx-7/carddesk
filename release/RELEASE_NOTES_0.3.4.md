@@ -10,9 +10,9 @@
 - **carddesk-tools-0.3.4.zip**：独立检索工具。解压后按 README 安装 Node 22+ 和私有依赖，另外准备本地模型；插件阅读不需要这个组件。
 - **carddesk-example-vault-0.3.4.zip**：原创示例库。解压并作为已有库打开，手动启用插件后从 P0/A 或 P4/Cards/入口体验。示例未预先启用插件，不带个人阅读状态。
 
-完整操作及回退说明见附件 **开始使用.md**；已知限制见 **KNOWN_LIMITATIONS.md**。**MODEL.json** 提供模型官方地址与固定哈希，权重不在附件中。
+完整操作及回退说明见附件 **INSTALL.md**；已知限制见 **KNOWN_LIMITATIONS.md**。**MODEL.json** 提供模型官方地址与固定哈希，权重不在附件中。
 
-下载全部附件到同一目录后，运行 `python3 校验发布包.py`，按 **SHA256SUMS.json** 验证文件和 ZIP 成员内容。
+下载全部附件到同一目录后，运行 `python3 verify-release.py`，按 **SHA256SUMS.json** 验证文件和 ZIP 成员内容。
 
 ## 安装检索工具
 
@@ -36,3 +36,5 @@ sh reuse-eval/aipm/download-model.sh
 验证覆盖 33 项工程测试，以及独立环境安装、禁网检索、缺模型回退、损坏索引重建和命名路径重启恢复；这不等于独立质量或大规模性能认证。
 
 本 Release 不上传用户书籍/PDF、私人笔记、个人状态、材料评测数据/报告、决策日志、密钥、模型或缓存。
+
+发布附件使用 ASCII 文件名，避免平台重命名影响校验。`v0.3.4` 标签保持指向原程序源码；附件仅修正发布命名与说明，SHA256SUMS.json 分别记录 sourceCommit 与 packagingCommit，插件二进制不变。
